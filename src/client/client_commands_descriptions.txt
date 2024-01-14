@@ -1,0 +1,4 @@
+close (closes connection to server)
+download <url> <directory_where_to_save> (downloads file from url to provided directory)
+status (displays status of server)
+commands (displays available commands)
