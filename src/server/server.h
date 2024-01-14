@@ -9,6 +9,8 @@
 #include <chrono>
 #include <fstream>
 #include <sstream>
+#include <signal.h>
+#include <vector>
 
 #define SOCKET_CREATION_ERROR "Error creating socket"
 #define SET_SOCKET_OPTIONS_ERROR "Error setting socket options"
@@ -23,6 +25,10 @@
 #define CLIENT_CLOSE_CONNECTION_ERROR "Error closing client connection"
 
 #define SERVER_RECEIVED_MESSAGE "Server received message"
+#define SERVER_DISCONNECTED "Server is disconnected"
+#define STORAGE_PATH "storage/"
+#define MESSAGES_PATH "messages.txt"
+
 
 using namespace std;
 
@@ -42,4 +48,23 @@ struct ClientInfo {
     int port;
 };
 
-
+void server_status();
+string download_file(string url);
+void close_server_connection();
+void close_client_connection(struct ClientInfo* client);
+pair<string, int> get_ip_and_port(int socket, struct sockaddr_in address, socklen_t socket_length);
+void get_server_ip();
+void print_error(string message);
+void write_message_to_file(char* message, struct ClientInfo* client);
+void process_message(char* buffer, struct ClientInfo* client);
+void create_client_info(struct ClientInfo& client, int& socket, struct sockaddr_in& address, socklen_t& socket_length);
+void send_data(string message, struct ClientInfo* client);
+void receive_data(struct ClientInfo* client);
+void* handle_client(void* arg);
+void accept_client();
+void create_socket();
+void set_socket_options();
+void init_address();
+void bind_socket();
+void listen_socket();
+void signal_handler(int signal);

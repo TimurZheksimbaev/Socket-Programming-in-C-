@@ -1,6 +1,6 @@
 #!/bin/bash
 
-clang++ -arch arm64 src/server.cpp -o server -pthread
+clang++ -arch arm64 src/server/server.cpp -o server -pthread
 
 ./server
 

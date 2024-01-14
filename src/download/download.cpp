@@ -5,19 +5,11 @@
 #include <stdexcept>
 #include <string>
 
-
 using namespace std;
 
 class Downloader {
-
 private:
     string storage;
-public:
-
-    Downloader() {
-        storage = "storage/";
-    }
-
     string extract_file_name(const string &url) {
         int i = url.size();
         for (; i >= 0; i--) {
@@ -29,6 +21,10 @@ public:
         return url.substr(i + 1, url.size() - 1);
     }
 
+public:
+    Downloader() {
+        storage = "storage/";
+    }
     bool download(string url) {
 
         const string filename = extract_file_name(url);    
@@ -60,7 +56,6 @@ public:
         }
     }
 };
-
 
 
 int main() {

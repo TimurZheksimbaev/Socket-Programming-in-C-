@@ -1,36 +1,11 @@
-#include <iostream>
-#include <string>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <arpa/inet.h>
-#include <chrono>
-#include <fstream>
-#include <sstream>
+#include "server.h"
+#include "../constants.h"
+#include "../download/download.cpp"
 
-#include "constants.h"
-
-using namespace std;
-
-struct ServerInfo {
-    int connections;
-    int received_messages;
-    int sent_messages;
-    int threads;
-    string ip;
-    int port;
-};
-
-struct ClientInfo {
-    int socket;
-    struct sockaddr_in socket_address;
-    string ip;
-    int port;
-};
-
+int server_socket;
+struct sockaddr_in server_address;
 struct ServerInfo server_info;
+vector<struct ClientInfo> clients;
 auto start = chrono::high_resolution_clock::now();
 
 
@@ -51,15 +26,25 @@ void server_status() {
 
 }
 
-// string download_file(string url) {
-//     cout << "[GET] Download file form url: " << url << endl;
-//     Downloader downloader;
-//     downloader.download(url);
-//     string filename = downloader.extract_file_name(url);
-//     return filename;
-// }
+string download_file(string url) {
+    // cout << "[GET] Download file form url: " << url << endl;
+    // Downloader downloader;
+    // downloader.download(url);
+    // string filename = downloader.extract_file_name(url);
+    // return filename;
+}
 
+void close_server_connection() {
+    cout << endl << "[DISCONNECTION] Server disconnecting ..." << endl;
 
+    close(server_socket);
+    exit(0);
+}
+
+void close_client_connection(struct ClientInfo* client) {
+    cout << endl <<  "[DISCONNECTION] Client " << client->ip << ":" <<  client->port << " disconnected" << endl;
+    server_info.connections--;
+}
 
 pair<string, int> get_ip_and_port(int socket, struct sockaddr_in address, socklen_t socket_length) {
     char client_ip[INET_ADDRSTRLEN];
@@ -74,9 +59,21 @@ pair<string, int> get_ip_and_port(int socket, struct sockaddr_in address, sockle
     return ip_port;
 }
 
+void get_server_ip() {
+    server_info.port = server_address.sin_port;
+    sockaddr_in localAddress;
+    socklen_t localAddressSize = sizeof(localAddress);
+
+    if (getsockname(server_socket, (struct sockaddr*)&localAddress, &localAddressSize) == 0) {
+        char ipStr[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &localAddress.sin_addr, ipStr, INET_ADDRSTRLEN);
+        string ip_str(ipStr);
+        server_info.ip = ip_str;
+    }
+}
+
 void print_error(string message) {
     cerr << "[ERROR] " << message << endl;
-
 }
 
 void write_message_to_file(char* message, struct ClientInfo* client) {
@@ -91,42 +88,70 @@ void write_message_to_file(char* message, struct ClientInfo* client) {
     file.close();
 }
 
-bool is_url(const string url) {
-    string http = "http";
-    for (int i = 0; i < 5; i++) {
-        if (url[i] != http[i]) {
-            return false;
-        }
-    }
-    return true;
+void clear_messages_file() {
+    const char* filename = "storage/messages.txt";
+    ofstream file(filename, ios::trunc);
 }
 
-bool is_directory(const string directory) {
-    return directory.find("/");
-}
-
-
-void process_message(char* buffer, ssize_t bytesRead, struct ClientInfo* client) {
-
+void process_message(char* buffer, struct ClientInfo* client) {
     stringstream ss(buffer);
     string word;
-    while (ss >> word) {
-        if (word == CLOSE || bytesRead == 0) {
-            cout << "[DISCONNECTION] Client " << client->ip << ":" << client->port << " disconnected" << endl;
-            close(client->socket);
-        } else if (word == DOWNLOAD) {
-            string url;
-            ss >> url;
-            // string file_name = "storage/" + download_file(url); 
-
-        } else if (word == STATUS) {
+    while(ss >> word) {
+        if (word == STATUS) {
             server_status();
+        } else if(word == CLOSE) {
+            close_client_connection(client);
+        } else if (word == DOWNLOAD) {
+            string url, directory;
+            ss >> url;
+            ss >> directory;
+            download_file(url);
         }
     }
 }
 
 
+void create_client_info(struct ClientInfo& client, int& socket, struct sockaddr_in& address, socklen_t& socket_length) {
+    client.socket = socket;
+    client.socket_address = address;
+    pair<string, int> ip_port = get_ip_and_port(socket, address, socket_length);
+    client.ip = ip_port.first;
+    client.port = ip_port.second;
+}
 
+void send_data(string message, struct ClientInfo* client) {
+    if (send(client->socket, message.c_str(), message.length(), 0) == -1) {
+        print_error(SEND_DATA_ERROR);
+    }
+    server_info.sent_messages++;
+}
+
+void receive_data(struct ClientInfo* client) {
+    char buffer[1024];
+    size_t bytes_read;
+
+    while ((bytes_read = recv(client->socket, buffer, sizeof(buffer), 0)) != -1) {
+        buffer[bytes_read] = '\0';  
+        if (bytes_read == -1) {
+            cout << endl << "[DISCONNECTION] Client " << client->ip << ":" << client->port << " disconnected" << endl;
+            break;
+        } else if (bytes_read == 0) {
+             close(client->socket);
+            break;
+        }
+
+        cout << endl << "[MESSAGE] Received data from client " << client->ip << ":" << client->port << " - " << buffer << endl;
+
+        server_info.received_messages++;
+
+        write_message_to_file(buffer, client);
+
+        process_message(buffer, client);
+
+        send_data(SERVER_RECEIVED_MESSAGE, client);
+         
+    }
+}
 
 void* handle_client(void* arg) {
 
@@ -134,113 +159,104 @@ void* handle_client(void* arg) {
 
     server_info.threads++;
 
-    cout << "[CONNECTION] New connection from " << client->ip << ":" << client->port << endl;
+    cout << endl << "[CONNECTION] New connection from " << client->ip << ":" << client->port << endl;
 
-    char buffer[1024];
-    size_t bytes_read;
+    receive_data(client);
 
-    while ((bytes_read = recv(client->socket, buffer, sizeof(buffer), 0)) != -1) {
-        buffer[bytes_read] = '\0';  
-        if (bytes_read == -1) {
-            cout << "[DISCONNECTION] Client " << client->ip << ":" << client->port << " disconnected" << endl;
-            break;
-        }
-
-        if (bytes_read == 0) {
-            close(client->socket);
-            break;
-        }
-        cout << "[MESSAGE] Received data from client " << client->ip << ":" << client->port << " - " << buffer << endl;
-        server_info.received_messages++;
-        write_message_to_file(buffer, client);
-
-        process_message(buffer, bytes_read, client);
-
-        
-        if (send(client->socket, "poshol nahui", strlen("poshol nahui"), 0) >= 0) {
-            server_info.sent_messages++;
-        }
-    }
 
     pthread_exit(NULL);
+
 }
 
+void accept_client() {
+    // create client's socket and initialize address
+    int client_socket;
+    struct sockaddr_in client_address;
+    socklen_t client_socket_length = sizeof(client_address);
+    if ((client_socket = accept(server_socket, (struct sockaddr*)&client_address, &client_socket_length)) == -1) {
+        print_error(ACCEPT_CLIENT_ERROR);
+    }
+
+    server_info.connections++;
+
+    // construct client's info
+    struct ClientInfo client;
+    create_client_info(client, client_socket, client_address, client_socket_length);
+    clients.push_back(client);
+
+    // give a client their own thread
+    pthread_t thread;
+
+    if (pthread_create(&thread, NULL, handle_client, &client) != 0) {
+        print_error(THREAD_CREATION_ERROR);
+    }
+
+    server_info.threads++;
+
+    pthread_detach(thread);
+}
+
+void create_socket() {
+    if ((server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
+        print_error(SOCKET_CREATION_ERROR);
+    }
+}
+
+void set_socket_options() {
+    int opt = 1; 
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))){
+        print_error(SET_SOCKET_OPTIONS_ERROR);
+    }
+}
+
+void init_address() {
+    server_address.sin_family = AF_INET;
+    server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_address.sin_port = htons(PORT);
+}
+
+void bind_socket() {
+    cout << "[STARTING] Starting server ... " << endl;
+    if (bind(server_socket, (struct sockaddr*)&server_address, sizeof(server_address)) == -1) {
+
+        print_error(SOCKET_BIND_ERROR);
+    }
+}
+
+void listen_socket() {
+    cout << "[LISTENING] Server listening on port: " << PORT << " ..." << endl;
+    if (listen(server_socket, MAX_PENDING_CONNECTIONS) == -1) {
+
+        print_error(SERVER_LISTEN_ERROR);
+    }
+}
+
+
+void signal_handler(int signal) {
+    if (signal == SIGINT) {
+        close_server_connection();
+        clear_messages_file();
+    }
+}
 
 
 int main() {    
 
+    signal(SIGINT, signal_handler);
 
-    int opt = 1;    
-    int server_socket;
-    if ((server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
-        print_error("Error creating socket");
-    }
+    create_socket();
+    init_address();
+    set_socket_options();
 
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))){
-        print_error("Error setting socket options");
-    }
+    bind_socket();
+    listen_socket();
 
-    struct sockaddr_in server_address;
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
-    server_address.sin_port = htons(PORT);
-
-    server_info.port = server_address.sin_port;
-    sockaddr_in localAddress;
-    socklen_t localAddressSize = sizeof(localAddress);
-
-    if (getsockname(server_socket, (struct sockaddr*)&localAddress, &localAddressSize) == 0) {
-        char ipStr[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &localAddress.sin_addr, ipStr, INET_ADDRSTRLEN);
-        string ip_str(ipStr);
-        server_info.ip = ip_str;
-    }
+    get_server_ip();
     
 
-    if (bind(server_socket, (struct sockaddr*)&server_address, sizeof(server_address)) == -1) {
-        close(server_socket);
-        print_error("Error binding socket");
-    }
-
-    if (listen(server_socket, MAX_PENDING_CONNECTIONS) == -1) {
-        close(server_socket);
-        print_error("Error listening for connections");
-    }
-
-    cout << "[STARTING] Starting server ... " << endl;
-    cout << "[LISTENING] Server listening on port: " << PORT << " ..." << endl;
-
-
     while (true) {
-
-        int client_socket;
-        struct sockaddr_in client_address;
-        socklen_t client_socket_length = sizeof(client_address);
-        if ((client_socket = accept(server_socket, (struct sockaddr*)&client_address, &client_socket_length)) == -1) {
-            close(server_socket);
-            print_error("Error accepting connection");
-        }
-
-        struct ClientInfo client;
-        client.socket = client_socket;
-        client.socket_address = client_address;
-        pair<string, int> ip_port = get_ip_and_port(client_socket, client_address, client_socket_length);
-        client.ip = ip_port.first;
-        client.port = ip_port.second;
-
-        server_info.connections++;
-
-        pthread_t thread;
-        if (pthread_create(&thread, NULL, handle_client, &client) != 0) {
-            cerr << "Error creating thread for client" << endl;
-            close(client_socket);
-        }
-
-        pthread_detach(thread);
-
+        accept_client();
     }
-
-    close(server_socket);
 
     return 0;
 }
